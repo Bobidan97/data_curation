@@ -1,12 +1,18 @@
+import sys
+
 from llm import build_chembl_query_from_rag
 from rag_system import RAGSystem
 from chembl_query import get_molecules_activity_with_filters
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+documents_path = Path(__file__).parent.parent / "documents"
 
 def main():
     user_input = input("🔎 Enter your bioactivity query: ")
 
     #step 1: Get documentation from notebook (RAG)
-    rag = RAGSystem(directory_path=r"C:\Users\Alex Bal\PycharmProjects\data_curation\documents")
+    rag = RAGSystem(directory_path=str(documents_path))
     rag.process_documents()
     rag_result = rag.query(user_input)
     context_from_docs = rag_result['content']
