@@ -17,11 +17,11 @@ def build_chembl_query_from_rag(user_input: str, context: str) -> dict[str, str]
     prompt = f"""
     You are an assistant that converts natural language questions into ChEMBL API filter parameters.
 
-    Return ONLY a **JSON dictionary** of filters, with no preamble, no explanation, and no formatting text.
-
-    For example:
-    User: "Find all inhibitors for EGFR with IC50 < 100 nM"
-    Output: {{"target_pref_name": "EGFR", "standard_type": "IC50", "standard_units": "nM", "standard_relation": "<", "standard_value": 100}}
+    You must return a JSON dictionary with a resource key (e.g., 'activity', 'molecule', etc.) 
+    and valid ChEMBL API filter parameters.”. 
+    Do not wrap the output in markdown (no triple backticks).
+    Do not include any explanation, labels, or comments.
+    Only output raw JSON.
 
     Now process this query: "{user_input}"
     """

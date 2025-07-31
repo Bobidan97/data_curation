@@ -75,3 +75,22 @@ def get_molecules_activity_with_filters(filter_dict, target_only=False):
 
     except Exception as e:
         return {"error": f"Exception occurred while querying ChEMBL: {str(e)}"}
+
+import requests
+
+BASE_URL = "https://www.ebi.ac.uk/chembl/api/data"
+
+def execute_chembl_query(query_plan: dict) -> dict | list | None:
+    # Determine the resource type, e.g., "activity", "molecule", "target"
+    resource = query_plan.pop("resource", "activity")
+
+    # Construct full URL
+    endpoint = f"{BASE_URL}/{resource}.json"
+
+    # Send GET request with query_plan as parameters
+    try:
+        response = requests.get(endpoint, params=query_plan)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        return {"error": str(e)}

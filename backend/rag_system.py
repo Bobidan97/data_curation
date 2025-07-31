@@ -37,7 +37,7 @@ def query_vector_store(vector_store: FAISS, query: str, top_k: int = 5) -> List[
     """
     Find the most relevant chunks for a query.
     """
-    return vector_store.similarity_search(query, k=top_k)
+    return vector_store.similarity_search(query, k = top_k)
 
 
 class RAGSystem:
@@ -68,20 +68,20 @@ class RAGSystem:
         }
 
 
-def main():
-    rag = RAGSystem(directory_path=r"C:\Users\Alex Bal\PycharmProjects\data_curation\documents")
-    rag.process_documents()
+# def main():
+#     rag = RAGSystem(directory_path=r"C:\Users\alex_\PycharmProjects\data_curation\documents")
+#     rag.process_documents()
+#
+#     query = "Show me an example for collecting activity data"
+#     result = rag.query(query)
+#
+#     print(f"\n🔍 Query: {result['query']}")
+#     print("\n📄 Relevant Content:\n")
+#     print(result['content'])
 
-    query = "Show me an example for collecting activity data"
-    result = rag.query(query)
 
-    print(f"\n🔍 Query: {result['query']}")
-    print("\n📄 Relevant Content:\n")
-    print(result['content'])
-
-
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
 # def load_documents(directory_path: str) -> List[Document]:
 #     """
 #     Load Jupyter notebooks (.ipynb) from the directory.

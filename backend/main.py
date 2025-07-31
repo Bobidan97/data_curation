@@ -2,8 +2,9 @@ import sys
 
 from llm import build_chembl_query_from_rag
 from rag_system import RAGSystem
-from chembl_query import get_molecules_activity_with_filters
+from chembl_query import execute_chembl_query
 from pathlib import Path
+import pandas as pd
 
 sys.path.append(str(Path(__file__).parent.parent))
 documents_path = Path(__file__).parent.parent / "documents"
@@ -27,11 +28,22 @@ def main():
     print(chembl_query_plan)
 
     #step 3: Execute the interpreted ChEMBL query
-    results = get_molecules_activity_with_filters(chembl_query_plan)
+    results = execute_chembl_query(chembl_query_plan)
 
     print("\n💊 Results:")
-    print(results.columns)
-    print(results)
+    if "error" in results:
+        print("❌ Error:", results["error"])
+    else:
+        # Automatically detect the key that contains the result list
+        for key in ["activities", "molecules", "targets", "assays", "compounds"]:
+            if key in results:
+                records = results[key]
+                df = pd.DataFrame(records)
+                print(len(df))
+                print(df.head())
+                break
+        else:
+            print("⚠️ No recognized result list found in response.")
 
 if __name__ == "__main__":
     main()
