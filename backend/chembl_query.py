@@ -1,6 +1,5 @@
 from chembl_webresource_client.new_client import new_client
 import pandas as pd
-import ast
 
 def get_molecules_activity(target_protein, select=0):
     """Fetch IC50 bioactivity data for a given target protein."""
@@ -86,7 +85,7 @@ def execute_chembl_query(query_plan: dict) -> dict | list | None:
 
     # Construct full URL
     endpoint = f"{BASE_URL}/{resource}.json"
-
+    print(endpoint)
     # Send GET request with query_plan as parameters
     try:
         response = requests.get(endpoint, params=query_plan)
