@@ -58,9 +58,12 @@ def build_chembl_query_from_rag(user_input: str, context: str) -> str:
     - If the user specifies thresholds like "less than", "greater than", or a range:
       * Filter using `df.loc[(...conditions...)]`
       * Always check `standard_units` against the requested unit (e.g. "nM").
-    - Return ONLY valid Python code (no explanations, no markdown, no backticks).
+    - Use latin names when user query refers to an organism.
+    - DO NOT include markdown formatting, triple backticks, or ```python fences in your output.
+    - Return ONLY raw Python code (one complete block).
     - The final filtered DataFrame must be named `filtered_df`.
-
+    - Note that below is just an example and the user query could be more complicated (i.e. more filters) or less
+      complicated (i.e. a general query)
     Example:
     User: "Find all IC50 activities for erbb1 with IC50 < 100 nM"
     Output:
@@ -68,7 +71,7 @@ def build_chembl_query_from_rag(user_input: str, context: str) -> str:
     df = pd.DataFrame.from_dict(results)
     if "standard_value" in df.columns:
         df['standard_value'] = pd.to_numeric(df['standard_value'], errors='coerce')
-    filtered_df = df.loc[(df['standard_units'] == "nM") & (df['standard_value'] < 100)  (df['standard_relation'] == "<")]
+    filtered_df = df.loc[(df['standard_units'] == "nM") & (df['standard_value'] < 100) & (df['standard_relation'] == "<")]
     
     Now process this query: "{user_input}"
     """
