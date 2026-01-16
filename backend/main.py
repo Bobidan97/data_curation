@@ -10,7 +10,7 @@ documents_path = Path(__file__).parent.parent / "documents"
 def main():
     user_input = input("🔎 Enter your ChEMBL database query: ")
 
-    #step 1: Get documentation from notebook (RAG)
+    #step 1 get documentation from notebook (RAG)
     rag = RAGSystem(directory_path=str(documents_path))
     rag.process_documents()
     rag_result = rag.query(user_input)
@@ -19,7 +19,6 @@ def main():
     print("\n📚 Retrieved ChEMBL API usage context (aggregated):")
     print(context_from_docs)
 
-    # Print detailed information for each retrieved chunk
     print("\n📝 Retrieved Chunks with Metadata:")
     for i, doc in enumerate(rag_result['results']):
         print(f"\n--- Chunk {i + 1} ---")
@@ -29,13 +28,13 @@ def main():
         print("Content:")
         print(doc.page_content)
 
-    #step 2: LLM generates a ChEMBL API query plan using user input and notebook content
+    #step 2 LLM generates a ChEMBL API query plan using user input and notebook content
     pychembl_query_code = build_chembl_query_from_rag(user_input, context_from_docs)
 
     print("\n🧠 Generated Query Code:")
     print(pychembl_query_code)
 
-    #step 3: Execute the interpreted ChEMBL query
+    #step 3 execute the interpreted ChEMBL query
     namespace = {}
     try:
         exec(pychembl_query_code, globals(), namespace)
@@ -58,5 +57,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 ##example Find all inhibitors for erbB2 with IC50 < 100 nM

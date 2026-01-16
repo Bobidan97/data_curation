@@ -32,7 +32,8 @@ def build_chembl_query_from_rag(user_query: str, context: str) -> str:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user",
+                   "content": prompt}]
     )
 
     raw_code = response.choices[0].message.content.strip()
