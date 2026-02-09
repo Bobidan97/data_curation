@@ -1,7 +1,12 @@
 import sys
 import pandas as pd
+from chembl_webresource_client.new_client import new_client
 from llm import build_chembl_query_from_rag
 from rag_system import RAGSystem
+from utils.target_resolution import (
+    resolve_target_candidates,
+    prompt_user_to_select_target
+)
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -29,32 +34,51 @@ def main():
         print(doc.page_content)
 
     #step 2 LLM generates a ChEMBL API query plan using user input and notebook content
-    pychembl_query_code = build_chembl_query_from_rag(user_input, context_from_docs)
+    query_plan = build_chembl_query_from_rag(user_input, context_from_docs)
 
-    print("\n🧠 Generated Query Code:")
-    print(pychembl_query_code)
+    print("\n🧠 Generated Query Plan:")
+    print(query_plan)
 
-    #step 3 execute the interpreted ChEMBL query
-    namespace = {}
-    try:
-        exec(pychembl_query_code, globals(), namespace)
-        chembl_df = namespace.get("filtered_df", None)
+    # step 3 resolve target interactively
+    target_name = query_plan.get("target_name")
+    if not target_name:
+        print("❌ No target specified in query plan")
+        return
 
-        if chembl_df is None:
-            chembl_df = pd.DataFrame()
-        elif not isinstance(chembl_df, pd.DataFrame):
-            try:
-                chembl_df = pd.DataFrame.from_records(chembl_df)
-            except Exception:
-                chembl_df = pd.DataFrame()
+    candidates_df = resolve_target_candidates(target_name)
+    target_chembl_id = prompt_user_to_select_target(candidates_df)
 
-        print("💊 Number of results:", len(chembl_df))
-        print(chembl_df.head())
-        chembl_df.to_csv("chembl_df.csv", index=False)
+    # step 4 execute ChEMBL query deterministically
+    filters = query_plan.get("filters", {})
+    standard_type = filters.get("standard_type")
+    standard_units = filters.get("standard_units")
 
-    except Exception as e:
-        print(f"❌ Error executing generated query code: {e}")
+    # Fetch raw activities
+    activity_client = new_client.activity.filter(
+        target_chembl_id=target_chembl_id,
+        standard_type=standard_type,
+        standard_units=standard_units
+    )
+
+    df = pd.DataFrame(list(activity_client))
+
+    # step 5 apply numeric filtering if specified
+    if "value" in filters and filters["value"] is not None:
+        if "standard_value" in df.columns:
+            df["standard_value"] = pd.to_numeric(df["standard_value"], errors="coerce")
+            operator = filters.get("operator")
+            value = filters["value"]
+
+            if operator == "<":
+                df = df.loc[df["standard_value"] < value]
+            elif operator == ">":
+                df = df.loc[df["standard_value"] > value]
+
+        print("💊 Number of results:", len(df))
+        print(df.head())
+        df.to_csv("chembl_df.csv", index=False)
 
 if __name__ == "__main__":
     main()
 ##example Find all inhibitors for erbB2 with IC50 < 100 nM
+#### Fetch bioactivity for inhibitors of erbB2 with IC50 < 100 nM in mice
