@@ -28,10 +28,10 @@ def main():
     for i, doc in enumerate(rag_result['results']):
         print(f"\n--- Chunk {i + 1} ---")
         print(f"Source Notebook: {doc.metadata.get('source')}")
-        print(f"Cell Index: {doc.metadata.get('cell_index')}")
-        print(f"Cell Type: {doc.metadata.get('cell_type')}")
-        print("Content:")
-        print(doc.page_content)
+        print(f"Heading: {doc.metadata.get('heading')}")
+        print(f"Level: {doc.metadata.get('level')}")
+        print(f"Cell Index Range: {doc.metadata.get('cell_index_range')}")
+        print(f"Content:\n{doc.page_content[:500]}...")
 
     #step 2 LLM generates a ChEMBL API query plan using user input and notebook content
     query_plan = build_chembl_query_from_rag(user_input, context_from_docs)
@@ -39,21 +39,22 @@ def main():
     print("\n🧠 Generated Query Plan:")
     print(query_plan)
 
-    # step 3 resolve target interactively
+    #step 3 resolve target interactively
     target_name = query_plan.get("target_name")
     if not target_name:
         print("❌ No target specified in query plan")
         return
 
     candidates_df = resolve_target_candidates(target_name)
-    target_chembl_id = prompt_user_to_select_target(candidates_df)
+    if len(candidates_df) > 1:
+        target_chembl_id = prompt_user_to_select_target(candidates_df)
 
-    # step 4 execute ChEMBL query deterministically
+    #step 4 execute ChEMBL query deterministically
     filters = query_plan.get("filters", {})
     standard_type = filters.get("standard_type")
     standard_units = filters.get("standard_units")
 
-    # Fetch raw activities
+    #fetch raw activities
     activity_client = new_client.activity.filter(
         target_chembl_id=target_chembl_id,
         standard_type=standard_type,
@@ -61,8 +62,8 @@ def main():
     )
 
     df = pd.DataFrame(list(activity_client))
-
-    # step 5 apply numeric filtering if specified
+    #print(df)
+    #step 5 apply numeric filtering if specified
     if "value" in filters and filters["value"] is not None:
         if "standard_value" in df.columns:
             df["standard_value"] = pd.to_numeric(df["standard_value"], errors="coerce")

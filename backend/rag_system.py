@@ -18,36 +18,74 @@ def load_ipynb_documents(directory: str) -> List[Document]:
         with open(path, "r", encoding="utf-8") as f:
             notebook = json.load(f)
 
+        current_heading = ""
+        heading_level = 0
+        section_text = ""
+        section_cells = []
+
         for i, cell in enumerate(notebook.get("cells", [])):
             cell_type = cell.get("cell_type")
             source = "".join(cell.get("source", [])).strip()
-
             if not source:
                 continue
 
-            if cell_type == "code":
-                source = f"```python\n{source}\n```"
+            # Detect headings in markdown cells
+            if cell_type == "markdown":
+                lines = source.splitlines()
+                for line in lines:
+                    if line.startswith("#"):
+                        # flush previous section if it exists
+                        if section_text:
+                            docs.append(
+                                Document(
+                                    page_content=section_text,
+                                    metadata={
+                                        "source": filename,
+                                        "heading": current_heading,
+                                        "level": heading_level,
+                                        "cell_index_range": (section_cells[0],
+                                                             section_cells[-1]) if section_cells else None
+                                    }
+                                )
+                            )
+                            section_text = ""
+                            section_cells = []
 
+                        # new heading
+                        heading_level = line.count("#")
+                        current_heading = line.strip("# ").strip()
+                        section_text += line + "\n"
+                        section_cells.append(i)
+                    else:
+                        section_text += line + "\n"
+                        section_cells.append(i)
+
+            # Include code cells
+            elif cell_type == "code":
+                section_text += f"```python\n{source}\n```\n"
+                section_cells.append(i)
+
+        # flush last section
+        if section_text:
             docs.append(
                 Document(
-                    page_content=source,
+                    page_content=section_text,
                     metadata={
                         "source": filename,
-                        "cell_index": i,
-                        "cell_type": cell_type
-                    },
+                        "heading": current_heading,
+                        "level": heading_level,
+                        "cell_index_range": (section_cells[0], section_cells[-1]) if section_cells else None
+                    }
                 )
             )
-
-    print(f"✅ Loaded {len(docs)} documents from {directory}")
     return docs
 
-def chunk_documents(docs: List[Any], chunk_size=1000, chunk_overlap=200):
+
+def chunk_sections(sections: List[Document], chunk_size=1000, chunk_overlap=200):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap)
-    chunks = splitter.split_documents(docs)
-    print(f"✅ Number of document chunks: {len(chunks)}")
+    chunks = splitter.split_documents(sections)
     return chunks
 
 
@@ -97,14 +135,14 @@ class RAGSystem:
         self.embedding_model: OpenAIEmbeddings | None = None
 
     def process_documents(self) -> None:
-        documents = load_ipynb_documents(self.directory_path)
-        self.chunks = chunk_documents(documents, self.chunk_size, self.chunk_overlap)
+        sections = load_ipynb_documents(self.directory_path)
+        self.chunks = chunk_sections(sections, self.chunk_size, self.chunk_overlap)
         self.embedding_model, self.embeddings_matrix = create_embeddings(self.chunks)
 
     def query(self, query_text: str, top_k: int = 5) -> Dict[str, Any]:
 
         if self.embeddings_matrix is None:
-            raise ValueError("You need to run process_documents() first!")
+            raise ValueError("You need to run process_documents() first")
 
         results = query_vector_store(
             query = query_text,

@@ -30,7 +30,9 @@ def build_chembl_query_from_rag(user_query: str, context: str) -> str:
     - Do NOT include markdown, code fences, backticks, or explanations.
     - Only output the raw JSON dictionary.
     - If the user query matches multiple targets in ChEMBL (e.g., "erbB2"), do not narrow to a single target.
+    - Allow for leniency in the target search.
     - Instead, just output the general target name as given in the query.
+    - If user specifies the target organism then the latin name must be used as this is what ChEMBL uses.
     - The program will fetch all candidate targets and let the user choose.
     
     Example output:
