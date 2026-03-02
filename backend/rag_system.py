@@ -29,7 +29,7 @@ def load_ipynb_documents(directory: str) -> List[Document]:
             if not source:
                 continue
 
-            # Detect headings in markdown cells
+            #detect headings in markdown cells
             if cell_type == "markdown":
                 lines = source.splitlines()
                 for line in lines:
@@ -60,7 +60,7 @@ def load_ipynb_documents(directory: str) -> List[Document]:
                         section_text += line + "\n"
                         section_cells.append(i)
 
-            # Include code cells
+            #include code cells
             elif cell_type == "code":
                 section_text += f"```python\n{source}\n```\n"
                 section_cells.append(i)

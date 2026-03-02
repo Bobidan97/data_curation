@@ -1,65 +1,55 @@
-from typing import Dict, Any
-
 from openai import OpenAI
 import os
-import json
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-api_key = os.getenv("OPENAI_API_KEY")
-
-def build_chembl_query_from_rag(user_query: str, context: str) -> str:
-
+def generate_chembl_code(user_query: str, context: str) -> str:
 
     prompt = f"""
-    You are a Python programmer who knows the ChEMBL API.
-    You have the following relevant documentation and examples from notebooks:
-
-    {context}
-
-    Your Task: 
-    Convert the following user query into a structured Python dictionary (query plan):
-
-    User Query: {user_query}
-
-    Requirements:
-    - Use the ChEMBL API (or PyChEMBL) to retrieve data
-    - Do NOT return executable Python code.
-    - Return ONLY valid JSON.
-    - Do NOT include markdown, code fences, backticks, or explanations.
-    - Only output the raw JSON dictionary.
-    - If the user query matches multiple targets in ChEMBL (e.g., "erbB2"), do not narrow to a single target.
-    - Allow for leniency in the target search.
-    - Instead, just output the general target name as given in the query.
-    - If user specifies the target organism then the latin name must be used as this is what ChEMBL uses.
-    - The program will fetch all candidate targets and let the user choose.
+    You are an expert Python programmer who specialises in the ChEMBL database API.
+    You have the following relevant documentation and code examples retrieved from notebooks:
     
-    Example output:
-    {{
-    "entity": "activity",
-    "target_name": "EGFR",
-    "filters": {{
-        "standard_type": "IC50",
-        "standard_units": "nM",
-        "operator": "<",
-        "value": 100
-    }}
-    }}
+    {context}
+    
+    Your task:
+    Write Python code that fulfils the following user query using the chembl_webresource_client library.
+    
+    User Query: {user_query}
+    
+    Requirements:
+    - Use `new_client` from `chembl_webresource_client.new_client` — it is already imported and available.
+    - `pd` (pandas) is already imported and available.
+    - The variable `target_chembl_id` is already defined and contains the correct ChEMBL target ID — use it directly, do NOT look up the target yourself.
+    - Store the final results in a pandas DataFrame named `df`.
+    - Do NOT include any import statements.
+    - Do NOT include any target lookup or target resolution code.
+    - Return ONLY raw executable Python code — no markdown, no code fences, no backticks, no explanations.
     """
+
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
 
-    raw_response = response.choices[0].message.content.strip()
+    code = response.choices[0].message.content.strip()
+    code = re.sub(r"^```(?:python)?\s*\n?", "", code)
+    code = re.sub(r"\n?```\s*$", "", code)
+    return code.strip()
 
-    try:
-        query_plan = json.loads(raw_response)
-    except json.JSONDecodeError:
-        # fallback if LLM did not produce perfect JSON
-        query_plan = {"error": "Failed to parse JSON from LLM response", "raw": raw_response}
 
-    return query_plan
+def extract_target_name(user_query: str) -> str:
+    prompt = f"""Extract only the biological target name from the following query.
+    Return only the target name as a short string (e.g. "erbB2", "EGFR", "BRAF").
+    No explanation, no punctuation, no extra words.
+    
+    Query: {user_query}"""
 
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
