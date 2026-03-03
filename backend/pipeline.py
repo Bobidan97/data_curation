@@ -5,9 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from llm import generate_chembl_code, extract_target_name
+from llm import generate_chembl_code, classify_query as _classify_query
 from rag_system import RAGSystem
 from utils.target_resolution import resolve_target_candidates
+from utils.molecule_resolution import resolve_molecule_candidates
 
 documents_path = Path(__file__).parent.parent / "documents"
 
@@ -20,28 +21,47 @@ def run_rag(user_query: str) -> str:
     return result["content"]
 
 
-def get_generated_code(user_query: str, context: str) -> str:
-    """Use the LLM to generate ChEMBL Python code from the user query and RAG context."""
-    return generate_chembl_code(user_query, context)
+def classify_query(user_query: str) -> tuple[str, str | None]:
+    """Classify the query domain and extract entity name for resolution.
 
-
-def get_target_candidates(user_query: str) -> pd.DataFrame:
-    """Extract the target name from the query and resolve candidates from ChEMBL."""
-    target_name = extract_target_name(user_query)
-    return resolve_target_candidates(target_name)
-
-
-def fetch_chembl_data(generated_code: str, target_chembl_id: str) -> pd.DataFrame:
+    Returns:
+        (domain, entity_name) where domain is 'target' | 'molecule' | 'other'
+        and entity_name is a human-readable name to resolve, or None.
     """
-    Execute the LLM-generated code with target_chembl_id injected into scope.
-    Returns the resulting raw DataFrame.
+    return _classify_query(user_query)
+
+
+def get_entity_candidates(domain: str, entity_name: str) -> pd.DataFrame:
+    """Resolve a named entity to ChEMBL candidates based on domain."""
+    if domain == "target":
+        return resolve_target_candidates(entity_name)
+    elif domain == "molecule":
+        return resolve_molecule_candidates(entity_name)
+    raise ValueError(f"No resolution defined for domain '{domain}'")
+
+
+def get_generated_code(user_query: str, context: str, domain: str = "other") -> str:
+    """Use the LLM to generate ChEMBL Python code from the user query and RAG context."""
+    return generate_chembl_code(user_query, context, domain)
+
+
+def fetch_chembl_data(
+    generated_code: str,
+    domain: str = "other",
+    entity_chembl_id: str | None = None,
+) -> pd.DataFrame:
+    """Execute the LLM-generated code with the resolved entity ID injected into scope.
+
+    Injects `target_chembl_id` for target queries, `molecule_chembl_id` for molecule
+    queries, or neither for other queries.
+
     Raises ValueError if the code does not produce a DataFrame named 'df'.
     """
-    namespace = {
-        "target_chembl_id": target_chembl_id,
-        "new_client": new_client,
-        "pd": pd,
-    }
+    namespace = {"new_client": new_client, "pd": pd}
+    if entity_chembl_id is not None:
+        key = "target_chembl_id" if domain == "target" else "molecule_chembl_id"
+        namespace[key] = entity_chembl_id
+
     exec(generated_code, namespace)
 
     df = namespace.get("df")

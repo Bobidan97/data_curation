@@ -60,8 +60,9 @@ def curate_dataframe(df: pd.DataFrame, config: CurationConfig | None = None) -> 
     df = df.dropna(subset=required_cols)
 
     # step 3: cast standard_value to numeric, drop any new NaNs
-    df["standard_value"] = pd.to_numeric(df["standard_value"], errors="coerce")
-    df = df.dropna(subset=["standard_value"])
+    if "standard_value" in df.columns:
+        df["standard_value"] = pd.to_numeric(df["standard_value"], errors="coerce")
+        df = df.dropna(subset=["standard_value"])
 
     # step 4: exact measurements only
     if config.exact_relation_only and "standard_relation" in df.columns:
