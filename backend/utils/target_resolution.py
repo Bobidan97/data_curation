@@ -1,8 +1,8 @@
 import pandas as pd
-from chembl_webresource_client.new_client import new_client
 
 
 def resolve_target_candidates(query_target: str,) -> pd.DataFrame:
+    from chembl_webresource_client.new_client import new_client  # lazy — avoids network call at import time
     target_client = new_client.target
     fields = ["target_chembl_id", "pref_name", "organism", "target_type"]
 

@@ -9,6 +9,7 @@ from pipeline import (
     get_generated_code,
     get_entity_candidates,
     fetch_chembl_data,
+    run_descriptor_computation,
 )
 from utils.target_resolution import prompt_user_to_select_target
 from utils.molecule_resolution import prompt_user_to_select_molecule
@@ -46,6 +47,19 @@ def main():
     df_curated = curate_dataframe(df)
     print(f"📊 Raw results: {len(df)} | After curation: {len(df_curated)}")
     print(df_curated.head())
+
+    # step 7: compute molecular descriptors (skipped gracefully if RDKit not installed)
+    try:
+        cols_before = set(df_curated.columns)
+        df_curated = run_descriptor_computation(df_curated)
+        new_cols = [c for c in df_curated.columns if c not in cols_before]
+        if new_cols:
+            print(f"⚗️  Descriptors added: {new_cols}")
+        else:
+            print("⚗️  No canonical_smiles column found — descriptor step skipped.")
+    except ImportError as e:
+        print(f"⚠️  Skipping descriptors: {e}")
+
     df_curated.to_csv("chembl_df.csv", index=False)
 
 
