@@ -1,16 +1,6 @@
 [theme]
-# ── Colours ───────────────────────────────────────────────────────────────────
-# Accent: used for buttons, sliders, active widget borders, links
-primaryColor        = "#2563EB"   # Blue-600
-
-# Main canvas background
-backgroundColor     = "#FFFFFF"   # Pure white
-
-# Sidebar, expanders, code blocks, metric cards, dataframe header
-secondaryBackgroundColor = "#F1F5F9"   # Slate-100 — soft but clearly distinct
-
-# Body text, headings, labels
-textColor           = "#0F172A"   # Slate-900 — near-black, maximum readability
-
-# ── Font ──────────────────────────────────────────────────────────────────────
-font = "sans serif"
+primaryColor             = "#0891B2"   # cyan-600  — buttons, sliders, links
+backgroundColor          = "#F0F4F8"   # slate-100 — main canvas
+secondaryBackgroundColor = "#FFFFFF"   # white     — sidebar, containers, inputs
+textColor                = "#1E293B"   # slate-900 — primary text
+font                     = "sans serif"

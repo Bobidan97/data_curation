@@ -7,12 +7,22 @@ load_dotenv()
 
 _ENTITY_INSTRUCTIONS = {
     "target": (
-        "- The variable `target_chembl_id` is already defined and contains the resolved "
-        "ChEMBL target ID — use it directly, do NOT look up the target yourself."
+        "- A variable named `target_chembl_id` is ALREADY DEFINED in the runtime "
+        "and holds the real, resolved ChEMBL target ID (e.g. 'CHEMBL203'). "
+        "USE IT DIRECTLY by referring to the bare identifier `target_chembl_id` "
+        "in your filter calls — for example: `target.filter(target_chembl_id=target_chembl_id)`.\n"
+        "- DO NOT reassign `target_chembl_id` to anything (no `target_chembl_id = '...'`).\n"
+        "- DO NOT use placeholder strings like 'CHEMBLXXX', 'CHEMBL_ID', or '<id>'.\n"
+        "- DO NOT look up the target by name yourself — the resolution has already happened."
     ),
     "molecule": (
-        "- The variable `molecule_chembl_id` is already defined and contains the resolved "
-        "ChEMBL molecule ID — use it directly, do NOT look up the molecule yourself."
+        "- A variable named `molecule_chembl_id` is ALREADY DEFINED in the runtime "
+        "and holds the real, resolved ChEMBL molecule ID (e.g. 'CHEMBL25'). "
+        "USE IT DIRECTLY by referring to the bare identifier `molecule_chembl_id` "
+        "in your filter calls — for example: `activity.filter(molecule_chembl_id=molecule_chembl_id)`.\n"
+        "- DO NOT reassign `molecule_chembl_id` to anything (no `molecule_chembl_id = '...'`).\n"
+        "- DO NOT use placeholder strings like 'CHEMBLXXX', 'CHEMBL_ID', or '<id>'.\n"
+        "- DO NOT look up the molecule by name yourself — the resolution has already happened."
     ),
     "other": (
         "- No entity has been pre-resolved. Query ChEMBL data directly using `new_client`."
@@ -46,7 +56,7 @@ def generate_chembl_code(user_query: str, context: str, domain: str = "other") -
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -72,6 +82,10 @@ def generate_dataframe_edit_code(user_instruction: str, df_schema: str) -> str:
         "- Other DataFrames (e.g. raw_df, dup_rows, df_curated) are READ-ONLY references "
         "you may use for lookups, joins, or computing filters.\n"
         "- `pd` (pandas) and `np` (numpy) are already available.\n"
+        "- RDKit is also available (when installed): `Chem`, `Descriptors`, "
+        "`rdMolDescriptors`, `AllChem`, and `DataStructs` are in scope — use them "
+        "to compute molecular descriptors, fingerprints, or structural filters from "
+        "the `canonical_smiles` column. Do NOT import RDKit.\n"
         "- Do NOT include import statements or print statements.\n"
         "- Return ONLY raw executable Python — no markdown fences, no explanations.\n\n"
         "DataFrame glossary (when present in scope):\n"
@@ -123,13 +137,134 @@ def generate_dataframe_edit_code(user_instruction: str, df_schema: str) -> str:
         "      lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr\n"
         "      if ((grp['standard_value'] < lo) | (grp['standard_value'] > hi)).any():\n"
         "          outlier_smiles.add(canonical)\n"
-        "  df = df[~df['canonical_smiles'].isin(outlier_smiles)]\n"
+        "  df = df[~df['canonical_smiles'].isin(outlier_smiles)]\n\n"
+        "RDKit descriptor examples (use `Chem`, `Descriptors`, `rdMolDescriptors` — "
+        "already in scope, never import):\n"
+        "  # `_calc(smi, func)` is ALREADY DEFINED in scope — do NOT redefine it.\n"
+        "  # It safely parses a SMILES string and applies `func(mol)`, returning NaN\n"
+        "  # on parse errors or exceptions. Use it directly in .apply() calls.\n\n"
+        "  # Add QED (drug-likeness) column:\n"
+        "  df['QED'] = df['canonical_smiles'].apply(lambda s: _calc(s, Descriptors.qed))\n\n"
+        "  # Add fraction sp3 carbons:\n"
+        "  df['FractionCSP3'] = df['canonical_smiles'].apply(\n"
+        "      lambda s: _calc(s, rdMolDescriptors.CalcFractionCSP3))\n\n"
+        "  # Add Bertz complexity + Labute ASA in one pass:\n"
+        "  mols = [Chem.MolFromSmiles(s) if isinstance(s, str) else None\n"
+        "          for s in df['canonical_smiles']]\n"
+        "  df['BertzCT']   = [Descriptors.BertzCT(m)   if m else float('nan') for m in mols]\n"
+        "  df['LabuteASA'] = [Descriptors.LabuteASA(m) if m else float('nan') for m in mols]\n\n"
+        "  # Add molecular formula (string) and net formal charge:\n"
+        "  df['MolFormula']   = df['canonical_smiles'].apply(\n"
+        "      lambda s: _calc(s, rdMolDescriptors.CalcMolFormula))\n"
+        "  df['FormalCharge'] = df['canonical_smiles'].apply(\n"
+        "      lambda s: _calc(s, Chem.GetFormalCharge))\n\n"
+        "  # Any of the 200+ names in Descriptors.descList works — e.g. 'NumAromaticRings',\n"
+        "  # 'MolMR', 'Chi0v', 'SlogP_VSA1', 'fr_halogen', 'MaxPartialCharge':\n"
+        "  func = dict(Descriptors.descList)['MaxPartialCharge']\n"
+        "  df['MaxPartialCharge'] = df['canonical_smiles'].apply(lambda s: _calc(s, func))\n"
     )
     user_message = f"DataFrame schema:\n{df_schema}\n\nInstruction: {user_instruction}"
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ]
+    )
+    code = response.choices[0].message.content.strip()
+    code = re.sub(r"^```(?:python)?\s*\n?", "", code)
+    code = re.sub(r"\n?```\s*$", "", code)
+    return code.strip()
+
+
+def generate_dataframe_query_code(user_question: str, df_schema: str) -> str:
+    """Convert a natural-language *question* about a DataFrame into read-only pandas code.
+
+    Unlike generate_dataframe_edit_code, this must NOT modify any DataFrame. The
+    generated code computes a result and assigns it to a variable named
+    ``answer`` (a scalar, string, Series, or small DataFrame). Returns raw
+    executable Python — no markdown fences, no explanations.
+    """
+    system_prompt = (
+        "You are a data analyst answering questions about a pandas DataFrame for "
+        "a cheminformatics researcher.\n\n"
+        "Rules:\n"
+        "- `df` is the working DataFrame (described in the schema below). Treat it "
+        "as READ-ONLY — never modify, filter-in-place, or reassign `df`.\n"
+        "- Other DataFrames (raw_df, dup_rows, df_curated, df_with_descriptors) may "
+        "be present as read-only references.\n"
+        "- `pd` (pandas) and `np` (numpy) are available. RDKit (`Chem`, "
+        "`Descriptors`, `rdMolDescriptors`) is available for structural questions; "
+        "the safe per-molecule helper `_calc(smiles, func)` is in scope.\n"
+        "- Compute the answer and assign it to a variable named `answer`.\n"
+        "- `answer` may be a number, string, pandas Series, or a small DataFrame "
+        "(e.g. a value_counts result or a groupby summary). Prefer a Series/DataFrame "
+        "when the question implies a breakdown.\n"
+        "- Do NOT print. Do NOT include imports. Return ONLY raw executable Python.\n\n"
+        "Examples:\n"
+        "  # 'what is the median pIC50?'\n"
+        "  answer = df['pIC50'].median()\n\n"
+        "  # 'how many unique targets?'\n"
+        "  answer = df['target_chembl_id'].nunique()\n\n"
+        "  # 'breakdown of assay types'\n"
+        "  answer = df['assay_type'].value_counts()\n\n"
+        "  # 'average pIC50 per standard_type, sorted'\n"
+        "  answer = df.groupby('standard_type')['pIC50'].mean().sort_values(ascending=False)\n\n"
+        "  # 'how many compounds have MW above 500?'\n"
+        "  answer = int((df['canonical_smiles'].apply(lambda s: _calc(s, Descriptors.MolWt)) > 500).sum())\n"
+    )
+    user_message = f"DataFrame schema:\n{df_schema}\n\nQuestion: {user_question}"
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ]
+    )
+    code = response.choices[0].message.content.strip()
+    code = re.sub(r"^```(?:python)?\s*\n?", "", code)
+    code = re.sub(r"\n?```\s*$", "", code)
+    return code.strip()
+
+
+def generate_plot_code(user_request: str, df_schema: str) -> str:
+    """Convert a natural-language chart request into Plotly code producing ``fig``.
+
+    The generated code must build a Plotly figure and assign it to a variable
+    named ``fig`` (read-only w.r.t. the data). Returns raw executable Python —
+    no markdown fences, no explanations.
+    """
+    system_prompt = (
+        "You are a data-visualisation assistant for a cheminformatics researcher. "
+        "You write Plotly code to chart a pandas DataFrame.\n\n"
+        "Rules:\n"
+        "- `df` is the working DataFrame (schema below); treat it as READ-ONLY.\n"
+        "- `px` (plotly.express) and `go` (plotly.graph_objects) are imported. "
+        "`pd` and `np` are available.\n"
+        "- Build exactly one figure and assign it to a variable named `fig`.\n"
+        "- Choose a sensible chart type for the request (histogram, box, scatter, "
+        "bar, violin, etc.). Add a clear title and axis labels.\n"
+        "- Only reference columns that exist in the schema. If the request needs a "
+        "derived quantity, compute it inline from existing columns.\n"
+        "- Do NOT call fig.show(), do NOT print, do NOT import. Return ONLY raw "
+        "executable Python.\n\n"
+        "Examples:\n"
+        "  # 'histogram of pIC50'\n"
+        "  fig = px.histogram(df, x='pIC50', nbins=30, title='pIC50 distribution')\n\n"
+        "  # 'pIC50 by assay type as a box plot'\n"
+        "  fig = px.box(df, x='assay_type', y='pIC50', title='pIC50 by assay type')\n\n"
+        "  # 'scatter of MW vs pIC50' (MW may need computing, but if a column exists use it)\n"
+        "  fig = px.scatter(df, x='MW', y='pIC50', opacity=0.6, title='MW vs pIC50')\n"
+    )
+    user_message = f"DataFrame schema:\n{df_schema}\n\nChart request: {user_request}"
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},
@@ -157,16 +292,16 @@ def classify_query(user_query: str) -> tuple[str, str | None]:
                   similarity, substructure, or molecular properties
       - other:    everything else — activities without a specific entity, tissues, cells,
                   ATC classes, drug indications, references, sources, metabolism
-    
+
     Second line — the entity name to resolve, or NONE
       - Return the human-readable name if the query uses a name/synonym (e.g. "imatinib", "EGFR")
       - Return NONE if the query uses an exact identifier (SMILES, InChI key, ChEMBL ID) or has no specific entity
-    
+
     Query: {user_query}"""
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
-        model="gpt-5-mini",
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
