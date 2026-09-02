@@ -1,0 +1,24 @@
+[project]
+name = "data-curation"
+version = "0.1.0"
+description = "Data curation pipeline for curating machine learning ready datasets."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chembl-webresource-client>=0.10.9",
+    "faiss-cpu>=1.13.2",
+    "langchain>=1.2.4",
+    "langchain-community>=0.4.1",
+    "langchain-openai>=1.1.7",
+    "langchain-text-splitters>=1.1.0",
+    "numpy>=2.4.1",
+    "openai>=2.15.0",
+    "optuna>=4.0.0",
+    "pandas>=2.3.3",
+    "shap>=0.45.0",
+    "python-dotenv>=1.2.1",
+    "scikit-learn>=1.8.0",
+    "streamlit>=1.40.0",
+    "plotly>=5.0.0",
+    "rdkit>=2023.9.1",
+]

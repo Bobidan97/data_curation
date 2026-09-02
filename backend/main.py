@@ -1,66 +1,67 @@
 import sys
-
-from llm import build_chembl_query_from_rag
-from rag_system import RAGSystem
-from chembl_query import execute_chembl_query
 from pathlib import Path
-from chembl_webresource_client.new_client import new_client
-import pandas as pd
 
-sys.path.append(str(Path(__file__).parent.parent))
-documents_path = Path(__file__).parent.parent / "documents"
+sys.path.insert(0, str(Path(__file__).parent))
+
+from pipeline import (
+    run_rag,
+    classify_query,
+    get_generated_code,
+    get_entity_candidates,
+    fetch_chembl_data,
+    run_descriptor_computation,
+)
+from utils.target_resolution import prompt_user_to_select_target
+from utils.molecule_resolution import prompt_user_to_select_molecule
+from curation import curate_dataframe
+
 
 def main():
     user_input = input("🔎 Enter your ChEMBL database query: ")
 
-    #step 1: Get documentation from notebook (RAG)
-    rag = RAGSystem(directory_path=str(documents_path))
-    rag.process_documents()
-    rag_result = rag.query(user_input)
-    context_from_docs = rag_result['content']
+    # step 1: classify domain and extract entity name (if any)
+    domain, entity_name = classify_query(user_input)
+    print(f"📂 Domain: {domain} | Entity: {entity_name or 'none'}")
 
-    print("\n📚 Retrieved ChEMBL API usage context:")
-    print(context_from_docs)
+    # step 2: retrieve relevant documentation via RAG
+    context_from_docs = run_rag(user_input)
 
-    #step 2: LLM generates a ChEMBL API query plan using user input + notebook content
-    pychembl_query_code = build_chembl_query_from_rag(user_input, context_from_docs)
+    # step 3: LLM generates Python code from user query + retrieved context + domain
+    generated_code = get_generated_code(user_input, context_from_docs, domain)
+    print(generated_code)
 
-    print("\n🧠 Generated Query Code:")
-    print(pychembl_query_code)
-
-    #step 3: Execute the interpreted ChEMBL query
-    namespace = {}
-    try:
-        exec(pychembl_query_code, globals(), namespace)
-        chembl_df = namespace.get("filtered_df", None)
-
-        if chembl_df is not None:
-            print("\n💊 Results:")
-            print(len(chembl_df))
-            print(chembl_df.head())
-            chembl_df.to_csv("chembl_df.csv")
+    # step 4: resolve entity interactively (only when a name needs disambiguation)
+    entity_chembl_id = None
+    if entity_name is not None:
+        candidates_df = get_entity_candidates(domain, entity_name)
+        print(candidates_df)
+        if domain == "target":
+            entity_chembl_id = prompt_user_to_select_target(candidates_df)
         else:
-            print("⚠️ No filtered_df was produced by the generated code.")
+            entity_chembl_id = prompt_user_to_select_molecule(candidates_df)
 
-    except Exception as e:
-        print(f"❌ Error executing generated query code: {e}")
+    # step 5: fetch raw data by executing the generated code
+    df = fetch_chembl_data(generated_code, domain, entity_chembl_id)
 
-    # if "error" in results:
-    #     print("❌ Error:", results["error"])
-    # else:
-    #     # Automatically detect the key that contains the result list
-    #     for key in ["activities", "molecules", "targets", "assays", "compounds"]:
-    #         if key in results:
-    #             records = results[key]
-    #             df = pd.DataFrame(records)
-    #             df.to_csv("egfr_results.csv",index=False)
-    #             print(len(df))
-    #             print(df.head())
-    #             break
-    #     else:
-    #         print("⚠️ No recognized result list found in response.")
+    # step 6: curate the raw results into an ML-ready dataset
+    df_curated = curate_dataframe(df)
+    print(f"📊 Raw results: {len(df)} | After curation: {len(df_curated)}")
+    print(df_curated.head())
+
+    # step 7: compute molecular descriptors (skipped gracefully if RDKit not installed)
+    try:
+        cols_before = set(df_curated.columns)
+        df_curated = run_descriptor_computation(df_curated)
+        new_cols = [c for c in df_curated.columns if c not in cols_before]
+        if new_cols:
+            print(f"⚗️  Descriptors added: {new_cols}")
+        else:
+            print("⚗️  No canonical_smiles column found — descriptor step skipped.")
+    except ImportError as e:
+        print(f"⚠️  Skipping descriptors: {e}")
+
+    df_curated.to_csv("chembl_df.csv", index=False)
+
 
 if __name__ == "__main__":
     main()
-
-##example Find all inhibitors for erbB1 with IC50 < 100 nM
