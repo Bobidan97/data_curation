@@ -50,6 +50,7 @@ from pipeline import (
     score_new_compounds,
     get_training_pic50_distribution,
     analyze_model_errors,
+    get_recommended_model_conditions,
     run_model_training,
     run_model_training_tuned,
     edit_dataframe,
@@ -4137,6 +4138,67 @@ if "raw_df" in st.session_state:
                 "**Detailed** exposes full configuration and runs automated "
                 "hyperparameter tuning to find the best settings for your dataset."
             )
+
+            # ── Recommended conditions (dataset-aware advice) ──────────────────
+            # Cache on a cheap content signature so we don't re-scaffold the whole
+            # working set on every rerun — only when the data actually changes.
+            _reco_sig = (
+                len(df_working),
+                int(df_working["canonical_smiles"].map(hash).sum())
+                if "canonical_smiles" in df_working.columns else 0,
+                float(pd.to_numeric(df_working["pIC50"], errors="coerce").fillna(0).sum()),
+            )
+            if st.session_state.get("_reco_sig") != _reco_sig:
+                st.session_state["_reco"] = get_recommended_model_conditions(df_working)
+                st.session_state["_reco_sig"] = _reco_sig
+            _reco = st.session_state["_reco"]
+
+            with st.expander("💡 Recommended conditions for this dataset", expanded=True):
+                if not _reco.get("ok"):
+                    st.info(_reco.get("message", "Recommendations unavailable."))
+                else:
+                    _rstats = _reco["stats"]
+                    _rec = _reco["recommendation"]
+
+                    # Snapshot of the properties the advice is based on
+                    _div = _rstats["scaffold_diversity"]
+                    _div_txt = "n/a" if _div is None else f"{_div:.2f}"
+                    _s1, _s2, _s3, _s4 = st.columns(4)
+                    _s1.metric("Compounds", _rstats["n_compounds"])
+                    _s2.metric("pIC50 span", f"{_rstats['pic50_span']:g}")
+                    _s3.metric("Scaffold diversity", _div_txt)
+                    _s4.metric("% active", f"{_rstats['active_fraction'] * 100:.0f}%")
+
+                    st.markdown("**Recommended setup**")
+                    for _r in _reco["reasons"]:
+                        st.markdown(f"- **{_r['setting']}: {_r['value']}** — {_r['why']}")
+
+                    for _w in _reco["warnings"]:
+                        st.warning(_w)
+
+                    st.caption(
+                        "Heuristics based on your dataset — a sensible starting "
+                        "point, not a guarantee. Adjust the controls below as you see fit."
+                    )
+                    if st.button(
+                        "✓ Apply recommended settings",
+                        key="apply_reco",
+                        help="Set the controls below to the recommended values.",
+                    ):
+                        st.session_state["split_method"] = _rec["split_label"]
+                        st.session_state["fp_method"] = _rec["fingerprint"]
+                        st.session_state["feat_sel"] = _rec["feature_selection_label"]
+                        if _rec["feature_selection"] == "mrmr":
+                            # Snap K onto the slider's grid (20–500, step 20)
+                            _k = int(round(_rec["n_features"] / 20) * 20)
+                            st.session_state["feat_sel_k"] = int(np.clip(_k, 20, 500))
+                        st.session_state["quick_model_type"] = _rec["model"]
+                        st.session_state["detail_model_type"] = _rec["model"]
+                        st.session_state["detail_test_split"] = int(_rec["test_size"] * 100)
+                        st.session_state["detail_cv_folds"] = _rec["cv_folds"]
+                        if _rec["use_optuna"]:
+                            st.session_state["detail_n_iter"] = _rec["optuna_trials"]
+                        st.toast("Applied recommended settings.")
 
             # ── Split method (shared between Quick + Detailed tabs) ────────────
             _SPLIT_LABELS = {
