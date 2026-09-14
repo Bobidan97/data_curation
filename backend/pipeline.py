@@ -803,6 +803,12 @@ def analyze_model_errors(model_result: dict) -> dict:
     return analyze_prediction_errors(model_result)
 
 
+def get_recommended_model_conditions(df: pd.DataFrame) -> dict:
+    """Recommend QSAR modelling conditions for the working set (thin wrapper)."""
+    from model_advisor import recommend_model_conditions
+    return recommend_model_conditions(df)
+
+
 def detect_upload_columns(df: pd.DataFrame) -> tuple:
     """Guess (smiles_col, name_col) from an uploaded table's headers (thin wrapper)."""
     from data_import import detect_columns
