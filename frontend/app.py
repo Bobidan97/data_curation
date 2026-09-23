@@ -478,338 +478,348 @@ st.markdown("""
 
 
 def _section_header(number, title: str) -> None:
-    """Render a professional numbered section header (badge + title)."""
+    """Render a section header (title only).
+
+    The ``number`` argument is kept so existing call sites are unchanged, but it
+    is no longer displayed — the tab bar now provides section navigation, so the
+    numbered badges were redundant.
+    """
     st.markdown(
         f'<div class="sec-head">'
-        f'<span class="sec-badge">{number}</span>'
         f'<span class="sec-title">{title}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-# ── Phase 1: Query ────────────────────────────────────────────────────────────
-with st.container(border=True):
-    _section_header(1, "Query")
-    user_query = st.text_input(
-        "Enter your ChEMBL database query",
-        placeholder="e.g. IC50 data for EGFR, activities for imatinib, approved drugs for lung cancer",
-    )
+_tab_data, _tab_overview, _tab_sar, _tab_dataset, _tab_desc, _tab_chem, _tab_model, _tab_rank = st.tabs([
+    "📥 Data", "📊 Overview", "🧬 SAR", "🗂️ Dataset", "📐 Descriptors",
+    "🌌 Chemical Space", "🤖 Model", "🏆 Ranking",
+])
 
-    _do_search = st.button("🔍 Search", disabled=not user_query,
-                           use_container_width=True, type="primary")
-
-    # ── Bring your own compounds (bypasses ChEMBL entity resolution) ───────────
-    with st.expander("📁 Or upload your own compounds (CSV)", expanded=False):
-        st.caption(
-            "A CSV with a SMILES column (and optionally a name/ID column). "
-            "Skips ChEMBL entity resolution - everything downstream (curation, "
-            "descriptors, chemical space, modelling) works the same as for a "
-            "ChEMBL query, minus bioactivity-specific fields like pIC50."
-        )
-        _uploaded_file = st.file_uploader("CSV file", type=["csv"], key="upload_csv_file")
-
-        if _uploaded_file is not None:
-            try:
-                _upload_raw = pd.read_csv(_uploaded_file)
-            except Exception as _ue:
-                st.error(f"Could not read this file as CSV: {_ue}")
-                _upload_raw = None
-
-            if _upload_raw is not None and not _upload_raw.empty:
-                _det_smiles, _det_name = detect_upload_columns(_upload_raw)
-                _up_cols = list(_upload_raw.columns)
-
-                _uc1, _uc2 = st.columns(2)
-                with _uc1:
-                    _smiles_col = st.selectbox(
-                        "SMILES column",
-                        options=_up_cols,
-                        index=_up_cols.index(_det_smiles) if _det_smiles in _up_cols else 0,
-                        key="upload_smiles_col",
-                    )
-                with _uc2:
-                    _name_options = ["(none - auto-number)"] + _up_cols
-                    _default_name_idx = (
-                        _name_options.index(_det_name) if _det_name in _up_cols else 0
-                    )
-                    _name_choice = st.selectbox(
-                        "Name / ID column (optional)",
-                        options=_name_options,
-                        index=_default_name_idx,
-                        key="upload_name_col",
-                    )
-                _name_col = None if _name_choice.startswith("(none") else _name_choice
-
-                st.caption(f"{len(_upload_raw):,} rows detected in the file.")
-                st.dataframe(_upload_raw.head(5), use_container_width=True, hide_index=True)
-
-                if st.button("✅ Validate & preview", key="btn_upload_validate"):
-                    with st.spinner("Validating structures…"):
-                        try:
-                            st.session_state["_upload_prepared"] = prepare_uploaded_compounds(
-                                _upload_raw, _smiles_col, _name_col
-                            )
-                        except ValueError as _ve:
-                            st.error(str(_ve))
-
-                if "_upload_prepared" in st.session_state:
-                    _prep = st.session_state["_upload_prepared"]
-                    _pu1, _pu2, _pu3 = st.columns(3)
-                    _pu1.metric("Rows in file", f"{_prep['n_input']:,}")
-                    _pu2.metric("Valid structures", f"{_prep['n_valid']:,}")
-                    _pu3.metric("Invalid / dropped", f"{_prep['n_invalid']:,}")
-
-                    if _prep["n_invalid"] > 0:
-                        with st.popover(f"👁️ View {min(20, _prep['n_invalid'])} dropped rows"):
-                            st.dataframe(
-                                _prep["invalid_df"].head(20),
-                                use_container_width=True, hide_index=True,
-                            )
-
-                    if _prep["n_valid"] > 0:
-                        _prev_df = _prep["df"].head(8)
-                        _prev_imgs = _build_image_column(
-                            tuple(_prev_df["canonical_smiles"]), size=(180, 140)
-                        )
-                        st.markdown("**Preview**")
-                        _up_ncols = min(4, len(_prev_df))
-                        _prev_rows = [
-                            list(zip(_prev_df["name"], _prev_imgs))[i:i + _up_ncols]
-                            for i in range(0, len(_prev_df), _up_ncols)
-                        ]
-                        for _prow in _prev_rows:
-                            _pcols = st.columns(len(_prow))
-                            for _pc, (_pname, _pimg) in zip(_pcols, _prow):
-                                with _pc:
-                                    if _pimg:
-                                        st.image(_pimg, use_container_width=True)
-                                    st.caption(_pname)
-
-                        if st.button(
-                            "📥 Import into dashboard", key="btn_upload_import", type="primary"
-                        ):
-                            st.session_state["raw_df"] = _prep["df"]
-                            st.session_state["domain"] = "molecule"
-                            st.session_state["user_query"] = f"Uploaded: {_uploaded_file.name}"
-                            st.session_state["entity_name"] = None
-                            st.session_state.pop("candidates_df", None)
-                            st.session_state.pop("generated_code", None)
-                            st.session_state.pop("_upload_prepared", None)
-                            st.rerun()
-                    else:
-                        st.warning(
-                            "No valid structures to import - check SMILES "
-                            "column selection above."
-                        )
-
-    if _do_search:
-        with st.spinner("Classifying query and generating code..."):
-            domain, entity_name = classify_query(user_query)
-            context = run_rag(user_query)
-            generated_code = get_generated_code(user_query, context, domain)
-            # Only resolve candidates when the domain has a candidate-resolver.
-            # The classifier sometimes returns an entity_name (e.g. 'imatinib',
-            # 'HeLa') with domain='other'; calling get_entity_candidates in that
-            # case raises ValueError.
-            candidates_df = (
-                get_entity_candidates(domain, entity_name)
-                if entity_name and domain in ("target", "molecule")
-                else None
-            )
-            st.session_state["domain"] = domain
-            st.session_state["generated_code"] = generated_code
-            st.session_state["candidates_df"] = candidates_df
-            st.session_state["user_query"] = user_query
-            st.session_state["entity_name"] = entity_name
-            st.session_state.pop("raw_df", None)
-
-# ── Phase 2: Entity selection (target or molecule) ────────────────────────────
-if "candidates_df" in st.session_state:
+with _tab_data:
+    # ── Phase 1: Query ────────────────────────────────────────────────────────────
     with st.container(border=True):
-        domain      = st.session_state.get("domain", "other")
-        candidates  = st.session_state["candidates_df"]
-        entity_name = st.session_state.get("entity_name") or ""
+        _section_header(1, "Query")
+        user_query = st.text_input(
+            "Enter your ChEMBL database query",
+            placeholder="e.g. IC50 data for EGFR, activities for imatinib, approved drugs for lung cancer",
+        )
 
-        if candidates is not None and not candidates.empty:
-            _n = len(candidates)
-            _n_label = f"**{_n} candidate{'s' if _n != 1 else ''}** found" + (
-                f" for *{entity_name}*" if entity_name else ""
+        _do_search = st.button("🔍 Search", disabled=not user_query,
+                               use_container_width=True, type="primary")
+
+        # ── Bring your own compounds (bypasses ChEMBL entity resolution) ───────────
+        with st.expander("📁 Or upload your own compounds (CSV)", expanded=False):
+            st.caption(
+                "A CSV with a SMILES column (and optionally a name/ID column). "
+                "Skips ChEMBL entity resolution - everything downstream (curation, "
+                "descriptors, chemical space, modelling) works the same as for a "
+                "ChEMBL query, minus bioactivity-specific fields like pIC50."
             )
+            _uploaded_file = st.file_uploader("CSV file", type=["csv"], key="upload_csv_file")
 
-            # ── TARGET selection ───────────────────────────────────────────
-            if domain == "target":
-                _section_header(2, "Select Target")
-                st.caption(_n_label)
+            if _uploaded_file is not None:
+                try:
+                    _upload_raw = pd.read_csv(_uploaded_file)
+                except Exception as _ue:
+                    st.error(f"Could not read this file as CSV: {_ue}")
+                    _upload_raw = None
 
-                # Quick filters
-                _tf1, _tf2 = st.columns(2)
-                _orgs_raw  = candidates["organism"].dropna().unique().tolist()
-                _prio_orgs = [o for o in ["Homo sapiens", "Mus musculus", "Rattus norvegicus"]
-                              if o in _orgs_raw]
-                _rest_orgs = sorted([o for o in _orgs_raw if o not in _prio_orgs])
-                _org_opts  = ["All"] + _prio_orgs + _rest_orgs
-                _type_opts = ["All"] + sorted(candidates["target_type"].dropna().unique().tolist())
+                if _upload_raw is not None and not _upload_raw.empty:
+                    _det_smiles, _det_name = detect_upload_columns(_upload_raw)
+                    _up_cols = list(_upload_raw.columns)
 
-                with _tf1:
-                    _org_f  = st.selectbox("Organism",    _org_opts,  key="ph2_org")
-                with _tf2:
-                    _type_f = st.selectbox("Target type", _type_opts, key="ph2_type")
+                    _uc1, _uc2 = st.columns(2)
+                    with _uc1:
+                        _smiles_col = st.selectbox(
+                            "SMILES column",
+                            options=_up_cols,
+                            index=_up_cols.index(_det_smiles) if _det_smiles in _up_cols else 0,
+                            key="upload_smiles_col",
+                        )
+                    with _uc2:
+                        _name_options = ["(none - auto-number)"] + _up_cols
+                        _default_name_idx = (
+                            _name_options.index(_det_name) if _det_name in _up_cols else 0
+                        )
+                        _name_choice = st.selectbox(
+                            "Name / ID column (optional)",
+                            options=_name_options,
+                            index=_default_name_idx,
+                            key="upload_name_col",
+                        )
+                    _name_col = None if _name_choice.startswith("(none") else _name_choice
 
-                # Apply filters
-                _filt = candidates.copy()
-                if _org_f  != "All":
-                    _filt = _filt[_filt["organism"]    == _org_f]
-                if _type_f != "All":
-                    _filt = _filt[_filt["target_type"] == _type_f]
+                    st.caption(f"{len(_upload_raw):,} rows detected in the file.")
+                    st.dataframe(_upload_raw.head(5), use_container_width=True, hide_index=True)
 
-                if _filt.empty:
-                    st.warning("No candidates match these filters - clear one to broaden results.")
+                    if st.button("✅ Validate & preview", key="btn_upload_validate"):
+                        with st.spinner("Validating structures…"):
+                            try:
+                                st.session_state["_upload_prepared"] = prepare_uploaded_compounds(
+                                    _upload_raw, _smiles_col, _name_col
+                                )
+                            except ValueError as _ve:
+                                st.error(str(_ve))
+
+                    if "_upload_prepared" in st.session_state:
+                        _prep = st.session_state["_upload_prepared"]
+                        _pu1, _pu2, _pu3 = st.columns(3)
+                        _pu1.metric("Rows in file", f"{_prep['n_input']:,}")
+                        _pu2.metric("Valid structures", f"{_prep['n_valid']:,}")
+                        _pu3.metric("Invalid / dropped", f"{_prep['n_invalid']:,}")
+
+                        if _prep["n_invalid"] > 0:
+                            with st.popover(f"👁️ View {min(20, _prep['n_invalid'])} dropped rows"):
+                                st.dataframe(
+                                    _prep["invalid_df"].head(20),
+                                    use_container_width=True, hide_index=True,
+                                )
+
+                        if _prep["n_valid"] > 0:
+                            _prev_df = _prep["df"].head(8)
+                            _prev_imgs = _build_image_column(
+                                tuple(_prev_df["canonical_smiles"]), size=(180, 140)
+                            )
+                            st.markdown("**Preview**")
+                            _up_ncols = min(4, len(_prev_df))
+                            _prev_rows = [
+                                list(zip(_prev_df["name"], _prev_imgs))[i:i + _up_ncols]
+                                for i in range(0, len(_prev_df), _up_ncols)
+                            ]
+                            for _prow in _prev_rows:
+                                _pcols = st.columns(len(_prow))
+                                for _pc, (_pname, _pimg) in zip(_pcols, _prow):
+                                    with _pc:
+                                        if _pimg:
+                                            st.image(_pimg, use_container_width=True)
+                                        st.caption(_pname)
+
+                            if st.button(
+                                "📥 Import into dashboard", key="btn_upload_import", type="primary"
+                            ):
+                                st.session_state["raw_df"] = _prep["df"]
+                                st.session_state["domain"] = "molecule"
+                                st.session_state["user_query"] = f"Uploaded: {_uploaded_file.name}"
+                                st.session_state["entity_name"] = None
+                                st.session_state.pop("candidates_df", None)
+                                st.session_state.pop("generated_code", None)
+                                st.session_state.pop("_upload_prepared", None)
+                                st.rerun()
+                        else:
+                            st.warning(
+                                "No valid structures to import - check SMILES "
+                                "column selection above."
+                            )
+
+        if _do_search:
+            with st.spinner("Classifying query and generating code..."):
+                domain, entity_name = classify_query(user_query)
+                context = run_rag(user_query)
+                generated_code = get_generated_code(user_query, context, domain)
+                # Only resolve candidates when the domain has a candidate-resolver.
+                # The classifier sometimes returns an entity_name (e.g. 'imatinib',
+                # 'HeLa') with domain='other'; calling get_entity_candidates in that
+                # case raises ValueError.
+                candidates_df = (
+                    get_entity_candidates(domain, entity_name)
+                    if entity_name and domain in ("target", "molecule")
+                    else None
+                )
+                st.session_state["domain"] = domain
+                st.session_state["generated_code"] = generated_code
+                st.session_state["candidates_df"] = candidates_df
+                st.session_state["user_query"] = user_query
+                st.session_state["entity_name"] = entity_name
+                st.session_state.pop("raw_df", None)
+
+    # ── Phase 2: Entity selection (target or molecule) ────────────────────────────
+    if "candidates_df" in st.session_state:
+        with st.container(border=True):
+            domain      = st.session_state.get("domain", "other")
+            candidates  = st.session_state["candidates_df"]
+            entity_name = st.session_state.get("entity_name") or ""
+
+            if candidates is not None and not candidates.empty:
+                _n = len(candidates)
+                _n_label = f"**{_n} candidate{'s' if _n != 1 else ''}** found" + (
+                    f" for *{entity_name}*" if entity_name else ""
+                )
+
+                # ── TARGET selection ───────────────────────────────────────────
+                if domain == "target":
+                    _section_header(2, "Select Target")
+                    st.caption(_n_label)
+
+                    # Quick filters
+                    _tf1, _tf2 = st.columns(2)
+                    _orgs_raw  = candidates["organism"].dropna().unique().tolist()
+                    _prio_orgs = [o for o in ["Homo sapiens", "Mus musculus", "Rattus norvegicus"]
+                                  if o in _orgs_raw]
+                    _rest_orgs = sorted([o for o in _orgs_raw if o not in _prio_orgs])
+                    _org_opts  = ["All"] + _prio_orgs + _rest_orgs
+                    _type_opts = ["All"] + sorted(candidates["target_type"].dropna().unique().tolist())
+
+                    with _tf1:
+                        _org_f  = st.selectbox("Organism",    _org_opts,  key="ph2_org")
+                    with _tf2:
+                        _type_f = st.selectbox("Target type", _type_opts, key="ph2_type")
+
+                    # Apply filters
                     _filt = candidates.copy()
+                    if _org_f  != "All":
+                        _filt = _filt[_filt["organism"]    == _org_f]
+                    if _type_f != "All":
+                        _filt = _filt[_filt["target_type"] == _type_f]
 
-                # Sort: Homo sapiens SINGLE PROTEINs first
-                _filt = _filt.copy()
-                _filt["_s"] = (
-                    (_filt["organism"]    == "Homo sapiens")  .astype(int) * 10
-                    + (_filt["target_type"] == "SINGLE PROTEIN").astype(int) * 5
-                )
-                _filt = (
-                    _filt.sort_values("_s", ascending=False)
-                    .drop(columns=["_s"])
-                    .reset_index(drop=True)
-                )
+                    if _filt.empty:
+                        st.warning("No candidates match these filters - clear one to broaden results.")
+                        _filt = candidates.copy()
 
-                # Candidate table
-                st.dataframe(
-                    _filt[["pref_name", "organism", "target_type", "target_chembl_id"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "pref_name":        st.column_config.TextColumn("Name",       width="large"),
-                        "organism":         st.column_config.TextColumn("Organism",   width="medium"),
-                        "target_type":      st.column_config.TextColumn("Type",       width="medium"),
-                        "target_chembl_id": st.column_config.TextColumn("ChEMBL ID",  width="small"),
-                    },
-                )
+                    # Sort: Homo sapiens SINGLE PROTEINs first
+                    _filt = _filt.copy()
+                    _filt["_s"] = (
+                        (_filt["organism"]    == "Homo sapiens")  .astype(int) * 10
+                        + (_filt["target_type"] == "SINGLE PROTEIN").astype(int) * 5
+                    )
+                    _filt = (
+                        _filt.sort_values("_s", ascending=False)
+                        .drop(columns=["_s"])
+                        .reset_index(drop=True)
+                    )
 
-                # Selection dropdown
-                _t_opts = {
-                    f"{row['pref_name']} ({row['target_chembl_id']})": row["target_chembl_id"]
-                    for _, row in _filt.iterrows()
-                }
-                _t_label       = st.selectbox("Select target", list(_t_opts.keys()), key="ph2_target_sel")
-                entity_chembl_id = _t_opts[_t_label]
+                    # Candidate table
+                    st.dataframe(
+                        _filt[["pref_name", "organism", "target_type", "target_chembl_id"]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "pref_name":        st.column_config.TextColumn("Name",       width="large"),
+                            "organism":         st.column_config.TextColumn("Organism",   width="medium"),
+                            "target_type":      st.column_config.TextColumn("Type",       width="medium"),
+                            "target_chembl_id": st.column_config.TextColumn("ChEMBL ID",  width="small"),
+                        },
+                    )
 
-                # Info strip for selected target
-                _sel = _filt[_filt["target_chembl_id"] == entity_chembl_id].iloc[0]
-                _ic1, _ic2, _ic3 = st.columns(3)
-                _ic1.metric("ChEMBL ID",   _sel["target_chembl_id"])
-                _ic2.metric("Organism",    _sel["organism"]    or "—")
-                _ic3.metric("Target Type", _sel["target_type"] or "—")
+                    # Selection dropdown
+                    _t_opts = {
+                        f"{row['pref_name']} ({row['target_chembl_id']})": row["target_chembl_id"]
+                        for _, row in _filt.iterrows()
+                    }
+                    _t_label       = st.selectbox("Select target", list(_t_opts.keys()), key="ph2_target_sel")
+                    entity_chembl_id = _t_opts[_t_label]
 
-            # ── MOLECULE selection ─────────────────────────────────────────
-            else:
-                _section_header(2, "Select Molecule")
-                st.caption(_n_label)
+                    # Info strip for selected target
+                    _sel = _filt[_filt["target_chembl_id"] == entity_chembl_id].iloc[0]
+                    _ic1, _ic2, _ic3 = st.columns(3)
+                    _ic1.metric("ChEMBL ID",   _sel["target_chembl_id"])
+                    _ic2.metric("Organism",    _sel["organism"]    or "—")
+                    _ic3.metric("Target Type", _sel["target_type"] or "—")
 
-                # Quick filters
-                _mf1, _mf2 = st.columns(2)
-                _phase_opts = ["All", "Approved (Phase 4)", "Phase 3+", "Phase 2+"]
-                _mtype_opts = ["All"] + sorted(candidates["molecule_type"].dropna().unique().tolist())
+                # ── MOLECULE selection ─────────────────────────────────────────
+                else:
+                    _section_header(2, "Select Molecule")
+                    st.caption(_n_label)
 
-                with _mf1:
-                    _phase_f = st.selectbox("Clinical phase",  _phase_opts, key="ph2_phase")
-                with _mf2:
-                    _mtype_f = st.selectbox("Molecule type",   _mtype_opts, key="ph2_mtype")
+                    # Quick filters
+                    _mf1, _mf2 = st.columns(2)
+                    _phase_opts = ["All", "Approved (Phase 4)", "Phase 3+", "Phase 2+"]
+                    _mtype_opts = ["All"] + sorted(candidates["molecule_type"].dropna().unique().tolist())
 
-                # Apply filters
-                _filt = candidates.copy()
-                _filt["_pn"] = pd.to_numeric(_filt["max_phase"], errors="coerce").fillna(-1)
-                if _phase_f == "Approved (Phase 4)":
-                    _filt = _filt[_filt["_pn"] == 4]
-                elif _phase_f == "Phase 3+":
-                    _filt = _filt[_filt["_pn"] >= 3]
-                elif _phase_f == "Phase 2+":
-                    _filt = _filt[_filt["_pn"] >= 2]
-                if _mtype_f != "All":
-                    _filt = _filt[_filt["molecule_type"] == _mtype_f]
+                    with _mf1:
+                        _phase_f = st.selectbox("Clinical phase",  _phase_opts, key="ph2_phase")
+                    with _mf2:
+                        _mtype_f = st.selectbox("Molecule type",   _mtype_opts, key="ph2_mtype")
 
-                if _filt.empty:
-                    st.warning("No candidates match these filters - clear one to broaden results.")
+                    # Apply filters
                     _filt = candidates.copy()
                     _filt["_pn"] = pd.to_numeric(_filt["max_phase"], errors="coerce").fillna(-1)
+                    if _phase_f == "Approved (Phase 4)":
+                        _filt = _filt[_filt["_pn"] == 4]
+                    elif _phase_f == "Phase 3+":
+                        _filt = _filt[_filt["_pn"] >= 3]
+                    elif _phase_f == "Phase 2+":
+                        _filt = _filt[_filt["_pn"] >= 2]
+                    if _mtype_f != "All":
+                        _filt = _filt[_filt["molecule_type"] == _mtype_f]
 
-                _filt = _filt.sort_values("_pn", ascending=False).reset_index(drop=True)
+                    if _filt.empty:
+                        st.warning("No candidates match these filters - clear one to broaden results.")
+                        _filt = candidates.copy()
+                        _filt["_pn"] = pd.to_numeric(_filt["max_phase"], errors="coerce").fillna(-1)
 
-                # Display table with formatted phase
-                _disp = _filt.drop(columns=["_pn"]).copy()
-                _disp["max_phase"] = _filt["_pn"].apply(
-                    lambda x: str(int(x)) if x >= 0 else "—"
-                )
-                st.dataframe(
-                    _disp[["pref_name", "molecule_type", "max_phase", "molecule_chembl_id"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "pref_name":          st.column_config.TextColumn("Name",      width="large"),
-                        "molecule_type":      st.column_config.TextColumn("Type",      width="medium"),
-                        "max_phase":          st.column_config.TextColumn("Phase",     width="small"),
-                        "molecule_chembl_id": st.column_config.TextColumn("ChEMBL ID", width="small"),
-                    },
-                )
+                    _filt = _filt.sort_values("_pn", ascending=False).reset_index(drop=True)
 
-                # Selection dropdown
-                _m_opts = {
-                    f"{row['pref_name']} ({row['molecule_chembl_id']})": row["molecule_chembl_id"]
-                    for _, row in _filt.iterrows()
+                    # Display table with formatted phase
+                    _disp = _filt.drop(columns=["_pn"]).copy()
+                    _disp["max_phase"] = _filt["_pn"].apply(
+                        lambda x: str(int(x)) if x >= 0 else "—"
+                    )
+                    st.dataframe(
+                        _disp[["pref_name", "molecule_type", "max_phase", "molecule_chembl_id"]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "pref_name":          st.column_config.TextColumn("Name",      width="large"),
+                            "molecule_type":      st.column_config.TextColumn("Type",      width="medium"),
+                            "max_phase":          st.column_config.TextColumn("Phase",     width="small"),
+                            "molecule_chembl_id": st.column_config.TextColumn("ChEMBL ID", width="small"),
+                        },
+                    )
+
+                    # Selection dropdown
+                    _m_opts = {
+                        f"{row['pref_name']} ({row['molecule_chembl_id']})": row["molecule_chembl_id"]
+                        for _, row in _filt.iterrows()
+                    }
+                    _m_label       = st.selectbox("Select molecule", list(_m_opts.keys()), key="ph2_mol_sel")
+                    entity_chembl_id = _m_opts[_m_label]
+
+                    # Info strip for selected molecule
+                    _sel    = _filt[_filt["molecule_chembl_id"] == entity_chembl_id].iloc[0]
+                    _mi1, _mi2, _mi3 = st.columns(3)
+                    _mi1.metric("ChEMBL ID",    _sel["molecule_chembl_id"])
+                    _mi2.metric("Molecule Type", _sel["molecule_type"] or "—")
+                    _mi3.metric("Max Phase",    str(int(_sel["_pn"])) if _sel["_pn"] >= 0 else "—")
+
+                if st.button("📥 Fetch Data"):
+                    with st.spinner("Fetching data from ChEMBL..."):
+                        try:
+                            st.session_state["raw_df"] = fetch_chembl_data(
+                                st.session_state["generated_code"], domain, entity_chembl_id
+                            )
+                        except Exception as e:
+                            st.error(str(e))
+
+            else:
+                # No resolution needed: exact ChEMBL ID / SMILES / 'other' domain
+                _section_header(2, "Fetch Data")
+                _domain_hints = {
+                    "molecule": "The query uses an exact identifier (SMILES, InChI key, or ChEMBL ID) - no disambiguation needed.",
+                    "other":    "This query does not reference a specific entity. The generated code will query ChEMBL directly.",
                 }
-                _m_label       = st.selectbox("Select molecule", list(_m_opts.keys()), key="ph2_mol_sel")
-                entity_chembl_id = _m_opts[_m_label]
+                st.info(_domain_hints.get(domain, "No entity resolution required. Click below to fetch data."))
 
-                # Info strip for selected molecule
-                _sel    = _filt[_filt["molecule_chembl_id"] == entity_chembl_id].iloc[0]
-                _mi1, _mi2, _mi3 = st.columns(3)
-                _mi1.metric("ChEMBL ID",    _sel["molecule_chembl_id"])
-                _mi2.metric("Molecule Type", _sel["molecule_type"] or "—")
-                _mi3.metric("Max Phase",    str(int(_sel["_pn"])) if _sel["_pn"] >= 0 else "—")
+                # For target/molecule queries using an exact ChEMBL ID, extract it so the
+                # LLM-generated code (which references target_chembl_id / molecule_chembl_id) works.
+                _direct_id = None
+                if domain in ("target", "molecule"):
+                    _match = re.search(
+                        r"CHEMBL\d+",
+                        st.session_state.get("user_query", ""),
+                        flags=re.IGNORECASE,
+                    )
+                    if _match:
+                        _direct_id = _match.group(0).upper()
 
-            if st.button("📥 Fetch Data"):
-                with st.spinner("Fetching data from ChEMBL..."):
-                    try:
-                        st.session_state["raw_df"] = fetch_chembl_data(
-                            st.session_state["generated_code"], domain, entity_chembl_id
-                        )
-                    except Exception as e:
-                        st.error(str(e))
-
-        else:
-            # No resolution needed: exact ChEMBL ID / SMILES / 'other' domain
-            _section_header(2, "Fetch Data")
-            _domain_hints = {
-                "molecule": "The query uses an exact identifier (SMILES, InChI key, or ChEMBL ID) - no disambiguation needed.",
-                "other":    "This query does not reference a specific entity. The generated code will query ChEMBL directly.",
-            }
-            st.info(_domain_hints.get(domain, "No entity resolution required. Click below to fetch data."))
-
-            # For target/molecule queries using an exact ChEMBL ID, extract it so the
-            # LLM-generated code (which references target_chembl_id / molecule_chembl_id) works.
-            _direct_id = None
-            if domain in ("target", "molecule"):
-                _match = re.search(
-                    r"CHEMBL\d+",
-                    st.session_state.get("user_query", ""),
-                    flags=re.IGNORECASE,
-                )
-                if _match:
-                    _direct_id = _match.group(0).upper()
-
-            if st.button("📥 Fetch Data"):
-                with st.spinner("Fetching data from ChEMBL..."):
-                    try:
-                        st.session_state["raw_df"] = fetch_chembl_data(
-                            st.session_state["generated_code"], domain, _direct_id
-                        )
-                    except Exception as e:
-                        st.error(str(e))
+                if st.button("📥 Fetch Data"):
+                    with st.spinner("Fetching data from ChEMBL..."):
+                        try:
+                            st.session_state["raw_df"] = fetch_chembl_data(
+                                st.session_state["generated_code"], domain, _direct_id
+                            )
+                        except Exception as e:
+                            st.error(str(e))
 
 # ── Phases 3–7: post-fetch pipeline ───────────────────────────────────────────
 if "raw_df" in st.session_state:
@@ -1130,152 +1140,152 @@ if "raw_df" in st.session_state:
     DOMAIN_LABEL = {"target": "Bioactivity", "molecule": "Molecule", "other": "Data"}
     section_label = DOMAIN_LABEL.get(domain, "Data")
 
-    # ── Structural duplicate analysis ─────────────────────────────────────────
-    if has_smiles:
-        dup_df = _cached_get_structural_duplicates(raw_df)
-        if not dup_df.empty:
-            total_groups  = len(dup_df)
-            total_removed = int(dup_df["would_remove"].sum())
-            with st.expander(
-                f"🔍 {total_groups} structural duplicate group(s) found "
-                f"- {total_removed} molecule(s) would be removed by deduplication",
-                expanded=False,
-            ):
-                # ── Structure grid (one image per group, capped at 8) ──────────
-                group_canons = dup_df["canonical_smiles"].tolist()
-                group_labels = [f"Group {i + 1}" for i in range(len(group_canons))]
-                display_canons = group_canons[:8]
-                display_labels = group_labels[:8]
-                if len(group_canons) > 8:
-                    st.caption(f"Showing first 8 of {len(group_canons)} groups.")
-                grid_cols = st.columns(len(display_canons))
-                _grid_imgs = _build_image_column(tuple(display_canons))
-                for col, img, label in zip(grid_cols, _grid_imgs, display_labels):
-                    if img:
-                        col.image(img, caption=label, use_container_width=True)
-                    else:
-                        col.caption(label)
-
-                # ── Activity strip plot ────────────────────────────────────────
-                dup_rows = _cached_get_duplicate_activity_rows(raw_df)
-                if (
-                    not dup_rows.empty
-                    and "standard_value" in dup_rows.columns
-                    and dup_rows["standard_value"].notna().any()
+    # ── Phase 3: Overview ─────────────────────────────────────────────────────
+    with _tab_overview:
+        _section_header(3, f"{section_label} Overview")
+        # ── Structural duplicate analysis ─────────────────────────────────────────
+        if has_smiles:
+            dup_df = _cached_get_structural_duplicates(raw_df)
+            if not dup_df.empty:
+                total_groups  = len(dup_df)
+                total_removed = int(dup_df["would_remove"].sum())
+                with st.expander(
+                    f"🔍 {total_groups} structural duplicate group(s) found "
+                    f"- {total_removed} molecule(s) would be removed by deduplication",
+                    expanded=False,
                 ):
-                    plot_df = dup_rows.copy()
-                    plot_df["standard_value"] = pd.to_numeric(
-                        plot_df["standard_value"], errors="coerce"
-                    )
-                    plot_df = plot_df.dropna(subset=["standard_value"])
+                    # ── Structure grid (one image per group, capped at 8) ──────────
+                    group_canons = dup_df["canonical_smiles"].tolist()
+                    group_labels = [f"Group {i + 1}" for i in range(len(group_canons))]
+                    display_canons = group_canons[:8]
+                    display_labels = group_labels[:8]
+                    if len(group_canons) > 8:
+                        st.caption(f"Showing first 8 of {len(group_canons)} groups.")
+                    grid_cols = st.columns(len(display_canons))
+                    _grid_imgs = _build_image_column(tuple(display_canons))
+                    for col, img, label in zip(grid_cols, _grid_imgs, display_labels):
+                        if img:
+                            col.image(img, caption=label, use_container_width=True)
+                        else:
+                            col.caption(label)
 
+                    # ── Activity strip plot ────────────────────────────────────────
+                    dup_rows = _cached_get_duplicate_activity_rows(raw_df)
                     if (
-                        "_canonical" in plot_df.columns
-                        and "canonical_smiles" in df_curated.columns
-                        and "canonical_smiles" in df_working.columns
+                        not dup_rows.empty
+                        and "standard_value" in dup_rows.columns
+                        and dup_rows["standard_value"].notna().any()
                     ):
-                        _manually_removed_smi = (
-                            set(df_curated["canonical_smiles"].dropna())
-                            - set(df_working["canonical_smiles"].dropna())
+                        plot_df = dup_rows.copy()
+                        plot_df["standard_value"] = pd.to_numeric(
+                            plot_df["standard_value"], errors="coerce"
                         )
-                        if _manually_removed_smi:
-                            plot_df = plot_df[
-                                ~plot_df["_canonical"].isin(_manually_removed_smi)
-                            ]
+                        plot_df = plot_df.dropna(subset=["standard_value"])
 
-                    if plot_df.empty:
-                        st.info(
-                            "All duplicate-group molecules have been removed "
-                            "from the working dataset."
-                        )
-                    else:
-                        group_order = sorted(
-                            plot_df["_group"].unique(),
-                            key=lambda g: int(re.search(r"\d+", g).group()),
-                        )
+                        if (
+                            "_canonical" in plot_df.columns
+                            and "canonical_smiles" in df_curated.columns
+                            and "canonical_smiles" in df_working.columns
+                        ):
+                            _manually_removed_smi = (
+                                set(df_curated["canonical_smiles"].dropna())
+                                - set(df_working["canonical_smiles"].dropna())
+                            )
+                            if _manually_removed_smi:
+                                plot_df = plot_df[
+                                    ~plot_df["_canonical"].isin(_manually_removed_smi)
+                                ]
 
-                        total_groups = len(group_order)
-                        # Streamlit's slider requires min_value < max_value, so only
-                        # render it when there are at least 2 groups to choose between.
-                        if total_groups <= 1:
-                            n_show = total_groups
-                            st.caption(
-                                f"{total_groups} duplicate group found."
+                        if plot_df.empty:
+                            st.info(
+                                "All duplicate-group molecules have been removed "
+                                "from the working dataset."
                             )
                         else:
-                            n_show = st.slider(
-                                "Groups to display",
-                                min_value=1,
-                                max_value=total_groups,
-                                value=min(20, total_groups),
-                                step=1,
-                                help=f"{total_groups} duplicate groups found. "
-                                     "Showing the first N (Group 1 = most duplicated).",
-                            )
-                        group_order = group_order[:n_show]
-                        if n_show < total_groups:
-                            st.caption(
-                                f"Showing {n_show} of {total_groups} groups. "
-                                "Increase the slider to see more."
+                            group_order = sorted(
+                                plot_df["_group"].unique(),
+                                key=lambda g: int(re.search(r"\d+", g).group()),
                             )
 
-                        sort_key = {g: i for i, g in enumerate(group_order)}
-                        plot_df = plot_df.copy()
-                        plot_df["_sort"] = plot_df["_group"].map(sort_key)
-                        plot_df = (
-                            plot_df[plot_df["_group"].isin(group_order)]
-                            .sort_values("_sort")
-                            .drop(columns=["_sort"])
-                        )
+                            total_groups = len(group_order)
+                            # Streamlit's slider requires min_value < max_value, so only
+                            # render it when there are at least 2 groups to choose between.
+                            if total_groups <= 1:
+                                n_show = total_groups
+                                st.caption(
+                                    f"{total_groups} duplicate group found."
+                                )
+                            else:
+                                n_show = st.slider(
+                                    "Groups to display",
+                                    min_value=1,
+                                    max_value=total_groups,
+                                    value=min(20, total_groups),
+                                    step=1,
+                                    help=f"{total_groups} duplicate groups found. "
+                                         "Showing the first N (Group 1 = most duplicated).",
+                                )
+                            group_order = group_order[:n_show]
+                            if n_show < total_groups:
+                                st.caption(
+                                    f"Showing {n_show} of {total_groups} groups. "
+                                    "Increase the slider to see more."
+                                )
 
-                        hover_cols = [
-                            c for c in ["molecule_chembl_id", "canonical_smiles",
-                                        "standard_type", "standard_units"]
-                            if c in dup_rows.columns
-                        ]
-                        fig_dup = go.Figure()
-                        for grp in group_order:
-                            grp_rows = plot_df[plot_df["_group"] == grp]
-                            n_mols = len(grp_rows)
-                            hover_text = grp_rows.apply(
-                                lambda r: "<br>".join(
-                                    f"{c}: {r[c]}" for c in hover_cols if pd.notna(r.get(c))
-                                ),
-                                axis=1,
-                            ).tolist()
-                            fig_dup.add_trace(go.Box(
-                                y=grp_rows["standard_value"].tolist(),
-                                name=f"{grp} (n={n_mols})",
-                                text=hover_text,
-                                hovertemplate="%{text}<extra></extra>",
-                                boxpoints="all",
-                                jitter=0.3,
-                                marker=dict(size=7, opacity=0.7, color=_PALETTE[1]),
-                                line=dict(color=_PALETTE[0]),
-                                fillcolor="rgba(8,145,178,0.15)",
-                            ))
-                        _apply_chart_style(fig_dup, height=420)
-                        fig_dup.update_layout(
-                            title="Activity values within structural duplicate groups",
-                            xaxis_title="Duplicate group",
-                            yaxis_title="Standard value (nM)",
-                            yaxis_type="log",
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig_dup, use_container_width=True)
-                else:
-                    st.info("No standard_value data available to plot activity.")
+                            sort_key = {g: i for i, g in enumerate(group_order)}
+                            plot_df = plot_df.copy()
+                            plot_df["_sort"] = plot_df["_group"].map(sort_key)
+                            plot_df = (
+                                plot_df[plot_df["_group"].isin(group_order)]
+                                .sort_values("_sort")
+                                .drop(columns=["_sort"])
+                            )
 
-                st.caption(
-                    "Use **Remove structural duplicates (canonicalise SMILES)** in the "
-                    "sidebar to control whether these are removed during curation."
-                )
-        else:
-            st.success("✅ No structural duplicates found in the raw data.")
+                            hover_cols = [
+                                c for c in ["molecule_chembl_id", "canonical_smiles",
+                                            "standard_type", "standard_units"]
+                                if c in dup_rows.columns
+                            ]
+                            fig_dup = go.Figure()
+                            for grp in group_order:
+                                grp_rows = plot_df[plot_df["_group"] == grp]
+                                n_mols = len(grp_rows)
+                                hover_text = grp_rows.apply(
+                                    lambda r: "<br>".join(
+                                        f"{c}: {r[c]}" for c in hover_cols if pd.notna(r.get(c))
+                                    ),
+                                    axis=1,
+                                ).tolist()
+                                fig_dup.add_trace(go.Box(
+                                    y=grp_rows["standard_value"].tolist(),
+                                    name=f"{grp} (n={n_mols})",
+                                    text=hover_text,
+                                    hovertemplate="%{text}<extra></extra>",
+                                    boxpoints="all",
+                                    jitter=0.3,
+                                    marker=dict(size=7, opacity=0.7, color=_PALETTE[1]),
+                                    line=dict(color=_PALETTE[0]),
+                                    fillcolor="rgba(8,145,178,0.15)",
+                                ))
+                            _apply_chart_style(fig_dup, height=420)
+                            fig_dup.update_layout(
+                                title="Activity values within structural duplicate groups",
+                                xaxis_title="Duplicate group",
+                                yaxis_title="Standard value (nM)",
+                                yaxis_type="log",
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig_dup, use_container_width=True)
+                    else:
+                        st.info("No standard_value data available to plot activity.")
 
-    # ── Phase 3: Overview ─────────────────────────────────────────────────────
-    with st.container(border=True):
-        _section_header(3, f"{section_label} Overview")
+                    st.caption(
+                        "Use **Remove structural duplicates (canonicalise SMILES)** in the "
+                        "sidebar to control whether these are removed during curation."
+                    )
+            else:
+                st.success("✅ No structural duplicates found in the raw data.")
+
 
         # ── Dropped rows reference ─────────────────────────────────────────────
         _n_dropped = len(df_dropped)
@@ -1949,6 +1959,7 @@ if "raw_df" in st.session_state:
         fig6.update_layout(coloraxis_showscale=False, xaxis_range=[0, 100])
         st.plotly_chart(fig6, use_container_width=True)
 
+    with _tab_sar:
         # ── Activity Cliffs (SALI) ─────────────────────────────────────────────
         if has_smiles and has_pic50:
             st.subheader("Activity Cliffs (Structural Similarity vs. Potency Difference)")
@@ -2220,7 +2231,7 @@ if "raw_df" in st.session_state:
                     )
 
     # ── Phase 4: Working Dataset ───────────────────────────────────────────────
-    with st.container(border=True):
+    with _tab_dataset:
         _section_header(4, "Working Dataset")
         if _manual_removed:
             st.caption(
@@ -2345,8 +2356,8 @@ if "raw_df" in st.session_state:
                             st.rerun()
 
     # ── Phase 5: Molecular Descriptors ────────────────────────────────────────
-    if has_smiles:
-        with st.container(border=True):
+    with _tab_desc:
+        if has_smiles:
             _section_header(5, "Molecular Descriptors")
             st.markdown(
                 "Computes **9 standard RDKit descriptors**: MW, LogP, TPSA, HBA, HBD, "
@@ -2488,8 +2499,8 @@ if "raw_df" in st.session_state:
                             )
 
     # ── Phase 6: Chemical Space ────────────────────────────────────────────────
-    if has_smiles:
-        with st.container(border=True):
+    with _tab_chem:
+        if has_smiles:
             _section_header(6, "Chemical Space")
 
             # ── (C) Combined report card — synthesises PCA + cluster metrics ───
@@ -4129,8 +4140,8 @@ if "raw_df" in st.session_state:
             key=f"{key_prefix}_download_btn",
         )
 
-    if has_smiles and "pIC50" in df_working.columns:
-        with st.container(border=True):
+    with _tab_model:
+        if has_smiles and "pIC50" in df_working.columns:
             _section_header(7, "Bioactivity Model")
             st.markdown(
                 "Predict **pIC50** from Morgan (ECFP4) fingerprints (2048-bit, radius 2). "
@@ -4592,8 +4603,8 @@ if "raw_df" in st.session_state:
                                 )
 
     # ── Phase 8: Desirability Ranking ─────────────────────────────────────────
-    if has_smiles:
-        with st.container(border=True):
+    with _tab_rank:
+        if has_smiles:
             _section_header(8, "Desirability Ranking")
             st.markdown(
                 "Combines several drug-discovery criteria into a single 0-100 "
