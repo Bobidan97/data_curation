@@ -397,3 +397,100 @@ def get_duplicate_rows(df: pd.DataFrame) -> pd.DataFrame:
     rows["_group"] = rows["_canonical"].map(canon_to_group)
 
     return rows.sort_values("_group").reset_index(drop=True)
+
+
+def resolve_duplicates(
+    df: pd.DataFrame,
+    method: str = "median",
+    threshold: float = 1.0,
+    smiles_col: str = "canonical_smiles",
+    pic50_col: str = "pIC50",
+) -> dict:
+    """Collapse structural duplicates using a chosen resolution strategy.
+
+    Groups rows by RDKit canonical SMILES (same key as
+    :func:`find_structural_duplicates`) and resolves each group's multiple
+    pIC50 measurements:
+
+        "median"      — keep one representative row per structure, with its
+                        pIC50 replaced by the group's median (robust average).
+        "concordance" — same as median for groups whose pIC50 **spread**
+                        (max − min) is within ``threshold`` (concordant), but
+                        **drop the whole group** when the spread exceeds it
+                        (discordant measurements are treated as unreliable).
+
+    Unique structures and rows without a parseable structure are passed through
+    unchanged. Non-destructive: returns a new DataFrame, leaving ``df`` intact.
+
+    Returns a dict:
+        ok               — False (with ``message``) if it couldn't run
+        df               — the resolved DataFrame
+        method/threshold — echoed
+        n_before/n_after — row counts
+        n_groups         — structural duplicate groups seen
+        n_merged         — groups collapsed to a representative
+        n_dropped_groups — groups dropped (concordance only)
+        n_rows_removed   — n_before − n_after
+    """
+    if smiles_col not in df.columns or pic50_col not in df.columns:
+        return {
+            "ok": False, "df": df,
+            "message": (
+                "Need a canonical_smiles column and a pIC50 column to resolve "
+                "duplicates by activity."
+            ),
+        }
+    try:
+        from rdkit import Chem  # noqa: F401 — validates RDKit is available
+    except ImportError:
+        return {"ok": False, "df": df, "message": "RDKit is required."}
+
+    method = method.lower()
+    work = df.copy().reset_index(drop=True)
+    work["__canon"] = work[smiles_col].map(_to_canonical)
+    work["__pic"] = pd.to_numeric(work[pic50_col], errors="coerce")
+
+    no_key = work[work["__canon"].isna()]        # unparseable — leave untouched
+    keyed = work[work["__canon"].notna()]
+
+    reps: list = []
+    n_groups = n_merged = n_dropped = 0
+    for _canon, g in keyed.groupby("__canon", sort=False):
+        is_group = len(g) >= 2
+        if is_group:
+            n_groups += 1
+        vals = g["__pic"].dropna()
+
+        if (
+            method == "concordance"
+            and is_group
+            and len(vals) >= 2
+            and float(vals.max() - vals.min()) > threshold
+        ):
+            n_dropped += 1
+            continue  # discordant group — drop entirely
+
+        rep = g.iloc[0].copy()
+        if len(vals) > 0:
+            rep[pic50_col] = float(vals.median())
+        if is_group:
+            n_merged += 1
+        reps.append(rep)
+
+    out = pd.DataFrame(reps) if reps else pd.DataFrame(columns=work.columns)
+    if not no_key.empty:
+        out = pd.concat([out, no_key], ignore_index=True)
+    out = out.drop(columns=["__canon", "__pic"], errors="ignore").reset_index(drop=True)
+
+    return {
+        "ok": True,
+        "df": out,
+        "method": method,
+        "threshold": threshold,
+        "n_before": len(df),
+        "n_after": len(out),
+        "n_groups": n_groups,
+        "n_merged": n_merged,
+        "n_dropped_groups": n_dropped,
+        "n_rows_removed": len(df) - len(out),
+    }

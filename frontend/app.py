@@ -21,6 +21,7 @@ from pipeline import (
     get_descriptor_correlations,
     get_structural_duplicates,
     get_duplicate_activity_rows,
+    resolve_duplicate_structures,
     run_chemical_space_pca,
     run_chemical_space_tsne,
     get_pca_insights,
@@ -1278,6 +1279,89 @@ if "raw_df" in st.session_state:
                             st.plotly_chart(fig_dup, use_container_width=True)
                     else:
                         st.info("No standard_value data available to plot activity.")
+
+                    st.divider()
+                    # ── Resolve duplicates (preset strategies) ─────────────────
+                    st.markdown("**Resolve duplicates**")
+                    if st.session_state.get("_dup_apply_msg"):
+                        st.success(st.session_state.pop("_dup_apply_msg"))
+                    if not has_pic50:
+                        st.caption(
+                            "Resolving duplicates by activity needs a pIC50 column — "
+                            "compute pIC50 during curation to enable this."
+                        )
+                    else:
+                        _dup_method = st.radio(
+                            "Strategy",
+                            options=["Median", "Concordance"],
+                            horizontal=True,
+                            key="dup_resolve_method",
+                            help=(
+                                "**Median** — collapse each structure to one row using the "
+                                "median of its pIC50 measurements.  \n"
+                                "**Concordance** — same for groups whose measurements agree, "
+                                "but drop any group whose pIC50 disagree by more than the "
+                                "threshold (treated as unreliable)."
+                            ),
+                        )
+                        _dup_thresh = 1.0
+                        if _dup_method == "Concordance":
+                            _dup_thresh = st.slider(
+                                "Concordance threshold — max pIC50 spread to keep a group",
+                                min_value=0.5, max_value=2.0, value=1.0, step=0.25,
+                                key="dup_conc_thresh",
+                                help="A group is dropped when its (max − min) pIC50 exceeds "
+                                     "this. ≈1.0 log unit reflects typical inter-lab noise.",
+                            )
+                        st.caption(
+                            "Applies to the **working dataset** (one row per structure). "
+                            "If auto-curation is removing duplicates (keep-first), this "
+                            "rebuilds the curated set without that step so the strategy can "
+                            "resolve them. Non-destructive — *↺ Reset to curated data* undoes it."
+                        )
+                        if st.button("Apply to working dataset", key="btn_dup_apply"):
+                            # Resolve on the working set when it still contains
+                            # duplicates. If auto-curation already removed them
+                            # (the default "keep-first" step), rebuild the curated
+                            # set without that step so the strategy has duplicates
+                            # to work with instead of silently doing nothing.
+                            _src, _rebuilt = df_working, False
+                            if get_structural_duplicates(df_working).empty:
+                                import dataclasses
+                                _src, _ = curate_dataframe(
+                                    raw_df,
+                                    dataclasses.replace(
+                                        config, remove_structural_duplicates=False
+                                    ),
+                                )
+                                _rebuilt = True
+                            _dres = resolve_duplicate_structures(
+                                _src,
+                                method=_dup_method.lower(),
+                                threshold=_dup_thresh,
+                            )
+                            if not _dres.get("ok"):
+                                st.error(_dres.get("message", "Could not resolve duplicates."))
+                            else:
+                                st.session_state["df_working"] = _dres["df"]
+                                _note = (
+                                    " · rebuilt from auto-curation without keep-first dedup"
+                                    if _rebuilt else ""
+                                )
+                                if _dup_method == "Concordance":
+                                    st.session_state["_dup_apply_msg"] = (
+                                        f"Concordance: merged {_dres['n_merged']} group(s), "
+                                        f"dropped {_dres['n_dropped_groups']} discordant group(s) "
+                                        f"— {_dres['n_rows_removed']:,} row(s) removed "
+                                        f"({_dres['n_before']:,} → {_dres['n_after']:,}){_note}."
+                                    )
+                                else:
+                                    st.session_state["_dup_apply_msg"] = (
+                                        f"Median: collapsed {_dres['n_merged']} duplicate group(s) "
+                                        f"— {_dres['n_rows_removed']:,} row(s) removed "
+                                        f"({_dres['n_before']:,} → {_dres['n_after']:,}){_note}."
+                                    )
+                                st.rerun()
 
                     st.caption(
                         "Use **Remove structural duplicates (canonicalise SMILES)** in the "

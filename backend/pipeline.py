@@ -250,6 +250,14 @@ def get_duplicate_activity_rows(df: pd.DataFrame) -> pd.DataFrame:
     return _get_duplicate_rows(df)
 
 
+def resolve_duplicate_structures(
+    df: pd.DataFrame, method: str = "median", threshold: float = 1.0,
+) -> dict:
+    """Collapse structural duplicates by median or concordance strategy (thin wrapper)."""
+    from curation import resolve_duplicates
+    return resolve_duplicates(df, method=method, threshold=threshold)
+
+
 def _build_llm_exec_namespace(df: pd.DataFrame, extra_dfs: dict | None) -> dict:
     """Build the exec namespace shared by edit_dataframe and answer_dataframe_question.
 
